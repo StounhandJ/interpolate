@@ -290,6 +290,54 @@ func TestExtractingIdentifiers(t *testing.T) {
 	}
 }
 
+func TestJointExpansion(t *testing.T) {
+	environ := interpolate.NewMapEnv(map[string]string{
+		"DATA":  "Blarghday",
+		"DATA2": "Llamas",
+	})
+
+	for _, tc := range []struct {
+		Str      string
+		Expected string
+	}{
+		{`${DATA:1-Tuesday}`, `larghday`},
+		{`${DATA:1:3-Tuesday}`, `lar`},
+		{`${DATA:1:-2-Tuesday}`, `larghd`},
+		{`${EMPTY_DATA:-Tuesday}`, `Tuesday`},
+		{`${DATA:1?no set data}`, `larghday`},
+		{`${EMPTY_DATA-Tuesday:1}`, `Tuesday:1`},
+		{`${EMPTY_DATA:-${DATA2}}`, `Llamas`},
+		{`${EMPTY_DATA:-${DATA2:2}}`, `amas`},
+		{`${EMPTY_DATA:-${EMPTY_DATA:2-empty}}`, `empty`},
+	} {
+		result, err := interpolate.Interpolate(environ, tc.Str)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result != tc.Expected {
+			t.Fatalf("Test %q failed: Expected substring %q, got %q", tc.Str, tc.Expected, result)
+		}
+	}
+}
+
+func TestJointExpansionForError(t *testing.T) {
+	for _, tc := range []struct {
+		Str         string
+		ExpectedErr string
+	}{
+		{`Hello ${REQUIRED_VAR:2:-2?}`, `$REQUIRED_VAR: not set`},
+		{`Hello ${REQUIRED_VAR:2:-2?is required}`, `$REQUIRED_VAR: is required`},
+		{`Hello ${REQUIRED_VAR:2?is required}`, `$REQUIRED_VAR: is required`},
+		{`Hello ${REQUIRED_VAR:?is required}`, `Offset is not a number, the resulting value is ""`},
+		{`Hello ${REQUIRED_VAR:ddd?is required}`, `Offset is not a number, the resulting value is "ddd"`},
+	} {
+		_, err := interpolate.Interpolate(nil, tc.Str)
+		if err == nil || err.Error() != tc.ExpectedErr {
+			t.Fatalf("Test %q should have failed with error %q, got %v", tc.Str, tc.ExpectedErr, err)
+		}
+	}
+}
+
 func BenchmarkBasicInterpolate(b *testing.B) {
 	env := interpolate.NewSliceEnv([]string{
 		"HELLO_WORLD=🦀",

@@ -140,13 +140,34 @@ func (p *Parser) parseBraceExpansion() (Expansion, error) {
 		return nil, err
 	}
 
+	variableExpansion := VariableExpansion{Identifier: identifier}
 	if c := p.peekRune(); c == '}' {
 		_ = p.nextRune()
-		return VariableExpansion{Identifier: identifier}, nil
+		return variableExpansion, nil
 	}
 
+	for {
+		var exp Expansion
+
+		if exp, err = p.getExpansion(identifier); err != nil {
+			return nil, err
+		}
+
+		variableExpansion.Expressions = append(variableExpansion.Expressions, exp)
+
+		if c := p.peekRune(); c == '}' {
+			_ = p.nextRune()
+			break
+		}
+	}
+
+	return variableExpansion, nil
+}
+
+func (p *Parser) getExpansion(identifier string) (Expansion, error) {
 	var operator string
 	var exp Expansion
+	var err error
 
 	// Parse an operator, some trickery is needed to handle : vs :-
 	if op1 := p.nextRune(); op1 == ':' {
@@ -185,10 +206,6 @@ func (p *Parser) parseBraceExpansion() (Expansion, error) {
 		}
 	}
 
-	if c := p.nextRune(); c != '}' {
-		return nil, fmt.Errorf("Expected brace expansion to end with }, got %c", c)
-	}
-
 	return exp, nil
 }
 
@@ -212,30 +229,64 @@ func (p *Parser) parseUnsetValueExpansion(identifier string) (Expansion, error) 
 }
 
 func (p *Parser) parseSubstringExpansion(identifier string) (Expansion, error) {
-	offset := p.scanUntil(func(r rune) bool {
-		return r == ':' || r == '}'
+	var offset string
+
+	for {
+		r := p.peekRune()
+		if r == ' ' {
+			_ = p.nextRune()
+			continue
+		} else {
+			break
+		}
+	}
+
+	if r := p.peekRune(); r == '-' {
+		offset += string(p.nextRune())
+	}
+
+	offset += p.scanUntil(func(r rune) bool {
+		return r == ':' || r == '}' || r == '?' || r == '-'
 	})
 
 	offsetInt, err := strconv.Atoi(strings.TrimSpace(offset))
 	if err != nil {
-		return nil, fmt.Errorf("Unable to parse offset: %v", err)
+		return nil, fmt.Errorf(`Offset is not a number, the resulting value is "%s"`, offset)
 	}
 
-	if c := p.peekRune(); c == '}' {
-		return SubstringExpansion{Identifier: identifier, Offset: offsetInt}, nil
+	exp := SubstringExpansion{Identifier: identifier, Offset: offsetInt}
+
+	if c := p.peekRune(); c != ':' {
+		return exp, nil
 	}
 
 	_ = p.nextRune()
-	length := p.scanUntil(func(r rune) bool {
-		return r == '}'
+
+	var length string
+	if p.peekRune() == '-' {
+		_ = p.nextRune()
+		// Проверим, что после минуса — цифра
+		if next := p.peekRune(); next >= '0' && next <= '9' {
+			length += "-" + string(p.nextRune())
+		} else {
+			return exp, nil
+		}
+	}
+
+	length += p.scanUntil(func(r rune) bool {
+		return r == ':' || r == '}' || r == '?' || r == '-'
 	})
 
 	lengthInt, err := strconv.Atoi(strings.TrimSpace(length))
 	if err != nil {
-		return nil, fmt.Errorf("Unable to parse length: %v", err)
+		return exp, nil
+		// return nil, fmt.Errorf(`Length is not a number, the resulting value is "%s"`, offset)
 	}
 
-	return SubstringExpansion{Identifier: identifier, Offset: offsetInt, Length: lengthInt, HasLength: true}, nil
+	exp.Length = lengthInt
+	exp.HasLength = true
+
+	return exp, nil
 }
 
 func (p *Parser) parseRequiredExpansion(identifier string) (Expansion, error) {

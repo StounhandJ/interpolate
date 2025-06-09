@@ -3,6 +3,7 @@ package interpolate
 import (
 	"bytes"
 	"fmt"
+	"slices"
 )
 
 // Interpolate takes a set of environment and interpolates it into the provided string using shell
@@ -24,7 +25,7 @@ func Identifiers(str string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return expr.Identifiers(), nil
+	return slices.Compact(expr.Identifiers()), nil
 }
 
 // An expansion is something that takes in ENV and returns a string or an error
@@ -35,16 +36,36 @@ type Expansion interface {
 
 // VariableExpansion represents either $VAR or ${VAR}, our simplest expansion
 type VariableExpansion struct {
-	Identifier string
+	Identifier  string
+	Expressions []Expansion
 }
 
 func (e VariableExpansion) Identifiers() []string {
-	return []string{e.Identifier}
+	identifiers := []string{e.Identifier}
+	for _, expansion := range e.Expressions {
+		identifiers = append(identifiers, expansion.Identifiers()...)
+	}
+	return identifiers
 }
 
 func (e VariableExpansion) Expand(env Env) (string, error) {
-	val, _ := env.Get(e.Identifier)
-	return val, nil
+	if len(e.Expressions) == 0 {
+		val, _ := env.Get(e.Identifier)
+		return val, nil
+	}
+
+	for _, expression := range e.Expressions {
+		val, err := expression.Expand(env)
+		if err != nil {
+			return "", err
+		}
+		if val == "" {
+			continue
+		}
+		return val, nil
+	}
+
+	return "", nil
 }
 
 // EmptyValueExpansion returns either the value of an env, or a default value if it's unset or null
@@ -96,7 +117,10 @@ func (e SubstringExpansion) Identifiers() []string {
 }
 
 func (e SubstringExpansion) Expand(env Env) (string, error) {
-	val, _ := env.Get(e.Identifier)
+	val, ok := env.Get(e.Identifier)
+	if !ok {
+		return "", nil
+	}
 
 	from := e.Offset
 
